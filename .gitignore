@@ -69,3 +69,6 @@ pennylane_cache/
 logs/
 runs/
 wandb/
+
+# ── Broken symlinks (Windows can't handle these) ──────────────
+04_VQA_TorchQuantum_Framework/docs/source/examples
