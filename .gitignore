@@ -1,0 +1,71 @@
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# ── Virtual environments ──────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# ── Jupyter ───────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Data / outputs (don't commit large datasets) ─────────────
+*.xlsx
+*.xls
+*.csv
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+data/
+datasets/
+results_summary.png
+
+# ── Model weights ─────────────────────────────────────────────
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# ── OS junk ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+
+# ── Testing / coverage ────────────────────────────────────────
+.pytest_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Qiskit / PennyLane cache ──────────────────────────────────
+.qiskit/
+pennylane_cache/
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+runs/
+wandb/
