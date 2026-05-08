@@ -47,22 +47,37 @@ def build_model(n_qubits: int = 4, n_estimators: int = 20, task: str = "regressi
         def _solve_qubo(self, H, lam=1.0):
             """
             Solve QUBO: min_w { ||y - Hw||² + λ||w||₁ }
-            First tries D-Wave, falls back to scipy binary optimisation.
+            For regression: uses continuous relaxation (Lasso-like) to get
+            real-valued weights. For classification: binary QUBO with L-BFGS-B.
             """
             N, M = H.shape
-            # Gradient-based binary optimisation (classical fallback)
-            # Relaxation: treat w ∈ [0,1], round at end
             from scipy.optimize import minimize
-            def obj(w):
-                diff = H @ w - self.y_tr_
-                return float(diff @ diff + lam * w.sum())
-            def grad(w):
-                diff = H @ w - self.y_tr_
-                return 2 * H.T @ diff + lam * np.ones(M)
-            w0  = np.random.rand(M) * 0.5
-            res = minimize(obj, w0, jac=grad, method="L-BFGS-B",
-                           bounds=[(0, 1)] * M, options={"maxiter": 200})
-            return (res.x > 0.5).astype(float)
+            if task == "regression":
+                # Continuous Lasso relaxation: w ∈ [0, 2/M] → avoids scale explosion
+                # when many weak learners are selected (sum stays in [0,1] range)
+                w_max = 2.0 / max(1, M)
+                def obj(w):
+                    diff = H @ w - self.y_tr_
+                    return float(diff @ diff + lam * w.sum())
+                def grad(w):
+                    diff = H @ w - self.y_tr_
+                    return 2 * H.T @ diff + lam * np.ones(M)
+                w0  = np.ones(M) * (w_max * 0.5)
+                res = minimize(obj, w0, jac=grad, method="L-BFGS-B",
+                               bounds=[(0, w_max)] * M, options={"maxiter": 500})
+                return res.x
+            else:
+                # Binary QUBO for classification
+                def obj(w):
+                    diff = H @ w - self.y_tr_
+                    return float(diff @ diff + lam * w.sum())
+                def grad(w):
+                    diff = H @ w - self.y_tr_
+                    return 2 * H.T @ diff + lam * np.ones(M)
+                w0  = np.random.rand(M) * 0.5
+                res = minimize(obj, w0, jac=grad, method="L-BFGS-B",
+                               bounds=[(0, 1)] * M, options={"maxiter": 500})
+                return (res.x > 0.5).astype(float)
 
         def fit(self, X, y):
             X = self.scaler_.fit_transform(X)
@@ -82,7 +97,8 @@ def build_model(n_qubits: int = 4, n_estimators: int = 20, task: str = "regressi
             out = H @ self.weights_
             if task == "classification":
                 return (out > 0).astype(int)
-            return out
+            # Regression: clip to valid normalised [0, 1] range
+            return np.clip(out, 0.0, 1.0)
 
         def predict_proba(self, X):
             X = self.scaler_.transform(X)
