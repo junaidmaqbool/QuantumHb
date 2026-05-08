@@ -1,69 +1,122 @@
 """
-eye_hb_model.py — Quantum Transfer Learning
+eye_hb_model.py -- Quantum Transfer Learning
 Paper : Mari et al., Quantum 4, 340 (2020) | Xanadu AI
-GitHub: XanaduAI/quantum-transfer-learning
 Task  : classification OR regression
-Arch  : Classical frozen ResNet-18 feature extractor + trainable quantum layer
-Note  : The backbone is already handled by the notebook's shared extractor.
-        Here we add an additional classical 'dress' layer (Mari et al. Fig 1).
+Arch  : Classical ResNet-18 feature extractor + trainable dressed quantum circuit
+
+ROOT CAUSE / FIXES  -- see quantum_compat.py for full explanation.
+Also fixed: the original model used a per-sample Python loop over the batch
+which was slow and caused dimension mismatches. Replaced with TorchLayer
+which handles batching internally via the torch interface.
 """
-import torch, torch.nn as nn
 
-def build_model(n_features: int = 4, n_qubits: int = 4,
-                n_layers: int = 2, task: str = "regression"):
-    import pennylane as qml
+import sys
+import os
+import logging
+import traceback
+import torch
+import torch.nn as nn
 
-    dev = qml.device("default.qubit", wires=n_qubits)
+logger = logging.getLogger("QuantumHb.QTransferLearning")
 
-    @qml.qnode(dev, interface="torch", diff_method="backprop")
-    def _dressed_circuit(inputs, pre_w, vqc_w, post_w):
-        """
-        'Dressed quantum circuit' from Mari et al.:
-          classical pre-proc → angle encoding → VQC → classical post-proc
-        The classical pre/post layers are thin Linear transforms.
-        """
-        # Angle-encode pre-processed features
-        for i in range(n_qubits):
-            qml.RY(inputs[..., i], wires=i)
-        # Variational layers
-        for l in range(n_layers):
-            for i in range(n_qubits):
-                qml.Rot(*vqc_w[l, i], wires=i)
-            for i in range(n_qubits - 1):
-                qml.CNOT(wires=[i, i + 1])
-        return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-    # Quantum layer returns n_qubits expectation values
-    weight_shapes = {"vqc_w": (n_layers, n_qubits, 3)}
+try:
+    from quantum_compat import (
+        PENNYLANE_AVAILABLE, BACKEND_INFO,
+        get_diff_method, build_classical_mlp,
+    )
+except ImportError:
+    PENNYLANE_AVAILABLE = False
+    BACKEND_INFO = {"fallback_reason": "quantum_compat.py not found"}
+    get_diff_method = lambda: "none"
 
-    class DressedQNet(nn.Module):
-        """Classical-Quantum-Classical 'dressed circuit' (Mari et al.)"""
-        def __init__(self):
-            super().__init__()
-            # Classical 'pre-dress': learned down-projection
-            self.pre  = nn.Sequential(nn.Linear(n_features, n_qubits), nn.Tanh())
-            # Quantum variational layer (only vqc_w trained here; encoding is data-driven)
-            self.vqc_w = nn.Parameter(
-                torch.randn(n_layers, n_qubits, 3) * 0.1)
-            # Classical 'post-dress': map n_qubits expectation values → 1 output
-            self.post = nn.Linear(n_qubits, 1)
+    def build_classical_mlp(n_features, n_hidden=64, task="regression"):
+        class _MLP(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(n_features, n_hidden),
+                    nn.GELU(),
+                    nn.Linear(n_hidden, n_hidden // 2),
+                    nn.GELU(),
+                    nn.Linear(n_hidden // 2, 1),
+                )
+            def forward(self, x):
+                o = self.net(x).squeeze(-1)
+                return torch.sigmoid(o) if task == "classification" else o
+        return _MLP()
 
-        def _q_forward(self, x):
-            # x: (batch, n_qubits) after pre-dress
-            results = []
-            for xi in x:                                # loop over batch
-                expvals = _dressed_circuit(
-                    xi.unsqueeze(0),
-                    None,                                # pre_w unused
-                    self.vqc_w,
-                    None)                                # post_w unused
-                results.append(torch.stack(expvals))
-            return torch.stack(results)                  # (batch, n_qubits)
 
-        def forward(self, x):
-            x   = self.pre(x) * torch.pi                # (batch, n_qubits)
-            q   = self._q_forward(x)                    # (batch, n_qubits)
-            out = self.post(q).squeeze(-1)               # (batch,)
-            return torch.sigmoid(out) if task == "classification" else out
+def build_model(n_features=4, n_qubits=4, n_layers=2, task="regression"):
+    """
+    Returns DressedQNet (quantum) or ClassicalMLP (fallback).
+    Interface: model(x: Tensor[B, n_features]) -> Tensor[B]
+    """
+    logger.info(
+        "QTransferLearning build_model | task=%s n_qubits=%d n_layers=%d pennylane=%s",
+        task, n_qubits, n_layers, PENNYLANE_AVAILABLE,
+    )
 
-    return DressedQNet()
+    # ---- quantum path --------------------------------------------------------
+    if PENNYLANE_AVAILABLE:
+        try:
+            import pennylane as qml
+
+            diff_method = get_diff_method()
+            dev = qml.device("default.qubit", wires=n_qubits)
+
+            @qml.qnode(dev, interface="torch", diff_method=diff_method)
+            def _dressed_circuit(inputs, vqc_w):
+                # Dressed quantum circuit (Mari et al.):
+                # angle encoding -> VQC -> n_qubits PauliZ expectation values
+                # Classical pre/post layers handled outside by DressedQNet.
+                for i in range(n_qubits):
+                    qml.RY(inputs[..., i], wires=i)
+                for l in range(n_layers):
+                    for i in range(n_qubits):
+                        qml.Rot(*vqc_w[l, i], wires=i)
+                    for i in range(n_qubits - 1):
+                        qml.CNOT(wires=[i, i + 1])
+                return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+
+            weight_shapes = {"vqc_w": (n_layers, n_qubits, 3)}
+            qlayer = qml.qnn.TorchLayer(_dressed_circuit, weight_shapes)
+
+            class DressedQNet(nn.Module):
+                """Classical-Quantum-Classical dressed circuit (Mari et al.)"""
+                _backend = "QTransferLearning-quantum"
+
+                def __init__(self):
+                    super().__init__()
+                    # pre-dress: down-project features to n_qubits
+                    self.pre    = nn.Sequential(
+                        nn.Linear(n_features, n_qubits),
+                        nn.Tanh(),
+                    )
+                    self.qlayer = qlayer
+                    # post-dress: map n_qubits expvals -> 1 output
+                    self.post   = nn.Linear(n_qubits, 1)
+
+                def forward(self, x):
+                    x   = self.pre(x) * 3.14159265   # (B, n_qubits)
+                    q   = self.qlayer(x)              # (B, n_qubits)
+                    out = self.post(q).squeeze(-1)    # (B,)
+                    return torch.sigmoid(out) if task == "classification" else out
+
+            logger.info("QTransferLearning quantum model ready  (diff_method=%s)", diff_method)
+            return DressedQNet()
+
+        except Exception as exc:
+            logger.warning("QTransferLearning quantum build FAILED: %s", exc)
+            logger.debug(traceback.format_exc())
+
+    # ---- classical fallback --------------------------------------------------
+    reason = BACKEND_INFO.get("fallback_reason") or "quantum build error"
+    logger.warning("QTransferLearning -> classical MLP fallback  (reason: %s)", reason)
+    model = build_classical_mlp(n_features=n_features, n_hidden=64, task=task)
+    model._backend = "QTransferLearning-classical-fallback"
+    return model
