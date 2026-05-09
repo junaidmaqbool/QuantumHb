@@ -110,7 +110,9 @@ def build_model(n_qubits=4, n_estimators=10, task="regression"):
                     arr = np.array(preds)
                     if task == "classification":
                         return (arr.mean(0) > 0.5).astype(int)
-                    return arr.mean(0)
+                    # Clip ensemble mean to [0,1] normalised range to prevent
+                    # out-of-range kernel predictions from inflating MAE.
+                    return np.clip(arr.mean(0), 0.0, 1.0)
 
                 def predict_proba(self, X):
                     probs = []

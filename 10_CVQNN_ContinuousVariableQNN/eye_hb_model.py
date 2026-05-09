@@ -47,7 +47,8 @@ except ImportError:
                 )
             def forward(self, x):
                 o = self.net(x).squeeze(-1)
-                return torch.sigmoid(o) if task == "classification" else o
+                # sigmoid for both tasks — keeps regression output in [0,1]
+                return torch.sigmoid(o)
         return _MLP()
 
 
@@ -106,18 +107,19 @@ def build_model(n_features=4, n_qubits=4, n_layers=2, task="regression"):
 
                 def __init__(self):
                     super().__init__()
-                    self.reducer  = nn.Linear(n_features, n_qubits)
-                    self.bn       = nn.BatchNorm1d(n_qubits)
-                    self.qlayer   = qlayer
-                    # learnable scale maps expval [-1,1] -> meaningful Hb range
-                    self.hb_scale = nn.Parameter(torch.tensor(4.0))
+                    self.reducer = nn.Linear(n_features, n_qubits)
+                    self.bn      = nn.BatchNorm1d(n_qubits)
+                    self.qlayer  = qlayer
+                    # NOTE: removed learnable hb_scale — it caused predictions to
+                    # grow far outside the normalised [0,1] Hb range (MAE ~45 g/dL).
+                    # sigmoid maps the PauliZ expval [-1,1] cleanly to [0,1].
 
                 def forward(self, x):
                     x   = torch.tanh(self.bn(self.reducer(x))) * 3.14159265
                     out = self.qlayer(x)
-                    if task == "classification":
-                        return torch.sigmoid(out)
-                    return (out + 1.0) / 2.0 * self.hb_scale
+                    # sigmoid bounds both classification and regression to [0,1],
+                    # matching normalised Hb labels and preventing out-of-range preds.
+                    return torch.sigmoid(out)
 
             logger.info("CVQNN quantum model ready  (diff_method=%s)", diff_method)
             return CVQNNNet()

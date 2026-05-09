@@ -47,7 +47,8 @@ except ImportError:
                 )
             def forward(self, x):
                 o = self.net(x).squeeze(-1)
-                return torch.sigmoid(o) if task == "classification" else o
+                # sigmoid bounds both tasks to [0,1]: prevents out-of-range regression predictions.
+                return torch.sigmoid(o)
         return _MLP()
 
 
@@ -105,7 +106,8 @@ def build_model(n_features=4, n_qubits=4, n_layers=2, task="regression"):
                     x   = self.pre(x) * 3.14159265   # (B, n_qubits)
                     q   = self.qlayer(x)              # (B, n_qubits)
                     out = self.post(q).squeeze(-1)    # (B,)
-                    return torch.sigmoid(out) if task == "classification" else out
+                    # sigmoid maps expval [-1,1] to [0,1], matching normalised Hb labels.
+                    return torch.sigmoid(out)
 
             logger.info("QTransferLearning quantum model ready  (diff_method=%s)", diff_method)
             return DressedQNet()

@@ -236,9 +236,9 @@ def build_classical_mlp(n_features: int, n_hidden: int = 64,
 
         def forward(self, x):
             out = self.net(x).squeeze(-1)
-            if task == "classification":
-                return torch.sigmoid(out)
-            return out
+            # sigmoid for both tasks — keeps regression output in [0,1] normalised
+            # space, matching Hb labels and preventing out-of-range predictions.
+            return torch.sigmoid(out)
 
     logger.info(f"Classical MLP fallback built  (n_features={n_features}, task={task})")
     return ClassicalMLP()

@@ -48,7 +48,8 @@ except ImportError:
                 )
             def forward(self, x):
                 o = self.net(x).squeeze(-1)
-                return torch.sigmoid(o) if task == "classification" else o
+                # sigmoid bounds both tasks to [0,1]: prevents out-of-range regression predictions.
+                return torch.sigmoid(o)
         return _MLP()
 
 
@@ -129,7 +130,8 @@ def build_model(n_features=4, n_qubits=4, n_layers=2, task="regression"):
                         self._warmstart(x.detach())
                         self._warmed = True
                     out = self.qlayer(x)
-                    return torch.sigmoid(out) if task == "classification" else out
+                    # sigmoid maps model output to [0,1], matching normalised Hb labels.
+                    return torch.sigmoid(out)
 
             logger.info("MetaLearning quantum model ready  (diff_method=%s)", diff_method)
             return MetaLearnQNN()
@@ -175,7 +177,8 @@ def build_model(n_features=4, n_qubits=4, n_layers=2, task="regression"):
                 self._warmstart(x.detach())
                 self._warmed = True
             out = self.mlp(x).squeeze(-1)
-            return torch.sigmoid(out) if task == "classification" else out
+            # sigmoid maps model output to [0,1], matching normalised Hb labels.
+                    return torch.sigmoid(out)
 
     logger.info("MetaLearning classical LSTM+MLP fallback built")
     return MetaLearnClassical()

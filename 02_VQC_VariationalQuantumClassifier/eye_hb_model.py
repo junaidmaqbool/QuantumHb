@@ -59,7 +59,8 @@ except ImportError:
                 )
             def forward(self, x):
                 o = self.net(x).squeeze(-1)
-                return torch.sigmoid(o) if task == "classification" else o
+                # sigmoid bounds both tasks to [0,1]: prevents out-of-range regression predictions.
+                return torch.sigmoid(o)
         return _MLP()
 
 
@@ -114,9 +115,9 @@ def build_model(n_features=4, n_qubits=4, n_layers=2, task="regression"):
                 def forward(self, x):
                     x = torch.tanh(self.bn(self.reducer(x))) * 3.14159265
                     out = self.qlayer(x)  # (batch,)
-                    if task == "classification":
-                        return torch.sigmoid(out)
-                    return out
+                    # sigmoid bounds both tasks to [0,1]: matches normalised
+                    # Hb labels and prevents out-of-range regression predictions.
+                    return torch.sigmoid(out)
 
             logger.info("VQC quantum model ready  (diff_method=%s)", diff_method)
             return VQCNet()
